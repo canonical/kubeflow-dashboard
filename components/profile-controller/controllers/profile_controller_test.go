@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"testing"
 
@@ -364,5 +365,88 @@ func TestGetAuthorizationPolicyAmbientMode(t *testing.T) {
 				t.Errorf("Expected TargetRef Name to be 'test-waypoint', got %s", targetRef.Name)
 			}
 		}
+	}
+}
+
+func TestGetAuthorizationPolicyAdditionalPrincipals(t *testing.T) {
+	profile := &profilev1.Profile{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-profile",
+		},
+		Spec: profilev1.ProfileSpec{
+			Owner: rbacv1.Subject{
+				Kind: "User",
+				Name: "test-user@example.com",
+			},
+		},
+	}
+
+	reconciler := &ProfileReconciler{
+		ServiceMeshMode: "istio-sidecar",
+		UserIdHeader:    "x-goog-authenticated-user-email",
+		UserIdPrefix:    "accounts.google.com:",
+	}
+
+	// Test without ADDITIONAL_PRINCIPALS set
+	os.Unsetenv("ADDITIONAL_PRINCIPALS")
+	policy := reconciler.getAuthorizationPolicy(profile)
+	firstRulePrincipals := policy.Rules[0].From[0].Source.Principals
+	if len(firstRulePrincipals) != 2 {
+		t.Errorf("Expected 2 principals without ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
+	}
+
+	// Test with a single additional principal
+	os.Setenv("ADDITIONAL_PRINCIPALS", "cluster.local/ns/extra/sa/extra-sa")
+	defer os.Unsetenv("ADDITIONAL_PRINCIPALS")
+	policy = reconciler.getAuthorizationPolicy(profile)
+	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
+	if len(firstRulePrincipals) != 3 {
+		t.Errorf("Expected 3 principals with one ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
+	}
+	if firstRulePrincipals[2] != "cluster.local/ns/extra/sa/extra-sa" {
+		t.Errorf("Expected third principal to be 'cluster.local/ns/extra/sa/extra-sa', got %s", firstRulePrincipals[2])
+	}
+
+	// Test with multiple additional principals
+	os.Setenv("ADDITIONAL_PRINCIPALS", "cluster.local/ns/foo/sa/bar, cluster.local/ns/baz/sa/qux")
+	policy = reconciler.getAuthorizationPolicy(profile)
+	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
+	if len(firstRulePrincipals) != 4 {
+		t.Errorf("Expected 4 principals with two ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
+	}
+	if firstRulePrincipals[2] != "cluster.local/ns/foo/sa/bar" {
+		t.Errorf("Expected third principal to be 'cluster.local/ns/foo/sa/bar', got %s", firstRulePrincipals[2])
+	}
+	if firstRulePrincipals[3] != "cluster.local/ns/baz/sa/qux" {
+		t.Errorf("Expected fourth principal to be 'cluster.local/ns/baz/sa/qux', got %s", firstRulePrincipals[3])
+	}
+
+	// Test with empty value
+	os.Setenv("ADDITIONAL_PRINCIPALS", "")
+	policy = reconciler.getAuthorizationPolicy(profile)
+	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
+	if len(firstRulePrincipals) != 2 {
+		t.Errorf("Expected 2 principals with empty ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
+	}
+
+	// Test with ambient mode and additional principals
+	reconcilerAmbient := &ProfileReconciler{
+		ServiceMeshMode: "istio-ambient",
+		WaypointName:    "test-waypoint",
+		UserIdHeader:    "x-goog-authenticated-user-email",
+		UserIdPrefix:    "accounts.google.com:",
+	}
+	os.Setenv("ADDITIONAL_PRINCIPALS", "cluster.local/ns/extra/sa/extra-sa")
+	policy = reconcilerAmbient.getAuthorizationPolicy(profile)
+	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
+	if len(firstRulePrincipals) != 3 {
+		t.Errorf("Expected 3 principals in ambient mode with ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
+	}
+	if firstRulePrincipals[2] != "cluster.local/ns/extra/sa/extra-sa" {
+		t.Errorf("Expected third principal to be 'cluster.local/ns/extra/sa/extra-sa', got %s", firstRulePrincipals[2])
+	}
+	// Verify TargetRefs is still set in ambient mode
+	if policy.TargetRefs == nil {
+		t.Errorf("Expected TargetRefs to be set in ambient mode with additional principals")
 	}
 }
