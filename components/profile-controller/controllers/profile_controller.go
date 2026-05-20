@@ -23,6 +23,7 @@ import (
 	"io/ioutil"
 	"os"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -458,6 +459,8 @@ func (r *ProfileReconciler) getAuthorizationPolicy(profileIns *profilev1.Profile
 		"KATIB_CONTROLLER_PRINCIPAL",
 		"cluster.local/ns/kubeflow/sa/katib-controller")
 
+	additionalPrincipals := getAdditionalPrincipals()
+
 	policy := &istioSecurity.AuthorizationPolicy{
 		Action: istioSecurity.AuthorizationPolicy_ALLOW,
 		// Empty selector == match all workloads in namespace
@@ -476,10 +479,10 @@ func (r *ProfileReconciler) getAuthorizationPolicy(profileIns *profilev1.Profile
 				},
 				From: []*istioSecurity.Rule_From{{
 					Source: &istioSecurity.Source{
-						Principals: []string{
+						Principals: append([]string{
 							istioIGWPrincipal,
 							kfpUIPrincipal,
-						},
+						}, additionalPrincipals...),
 					},
 				}},
 			},
@@ -1008,4 +1011,19 @@ func GetEnvDefault(variable string, defaultVal string) string {
 		return defaultVal
 	}
 	return envVar
+}
+
+// getAdditionalPrincipals returns a list of additional principals from the
+// ADDITIONAL_PRINCIPALS env variable. The value should be a comma-separated
+// list of principals (e.g. "cluster.local/ns/foo/sa/bar,cluster.local/ns/baz/sa/qux").
+func getAdditionalPrincipals() []string {
+	val := os.Getenv("ADDITIONAL_PRINCIPALS")
+	principals := make([]string, 0)
+	for _, p := range strings.Split(val, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			principals = append(principals, p)
+		}
+	}
+	return principals
 }
