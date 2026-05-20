@@ -1022,9 +1022,6 @@ func GetEnvDefault(variable string, defaultVal string) string {
 func getAdditionalPrincipals() []string {
 	val := os.Getenv("ADDITIONAL_PRINCIPALS")
 	principals := make([]string, 0)
-	if val == "" {
-		return principals
-	}
 	for _, p := range strings.Split(val, ",") {
 		p = strings.TrimSpace(p)
 		if p != "" {

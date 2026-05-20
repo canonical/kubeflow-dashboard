@@ -381,80 +381,115 @@ func TestGetAuthorizationPolicyAdditionalPrincipals(t *testing.T) {
 		},
 	}
 
-	reconciler := &ProfileReconciler{
+	sidecarReconciler := &ProfileReconciler{
 		ServiceMeshMode: "istio-sidecar",
 		UserIdHeader:    "x-goog-authenticated-user-email",
 		UserIdPrefix:    "accounts.google.com:",
 	}
-
-	// Test without ADDITIONAL_PRINCIPALS set
-	os.Unsetenv("ADDITIONAL_PRINCIPALS")
-	policy := reconciler.getAuthorizationPolicy(profile)
-	firstRulePrincipals := policy.Rules[0].From[0].Source.Principals
-	if len(firstRulePrincipals) != 2 {
-		t.Errorf("Expected 2 principals without ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
-	}
-
-	// Test with a single additional principal
-	os.Setenv("ADDITIONAL_PRINCIPALS", "cluster.local/ns/extra/sa/extra-sa")
-	defer os.Unsetenv("ADDITIONAL_PRINCIPALS")
-	policy = reconciler.getAuthorizationPolicy(profile)
-	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
-	if len(firstRulePrincipals) != 3 {
-		t.Errorf("Expected 3 principals with one ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
-	}
-	if firstRulePrincipals[2] != "cluster.local/ns/extra/sa/extra-sa" {
-		t.Errorf("Expected third principal to be 'cluster.local/ns/extra/sa/extra-sa', got %s", firstRulePrincipals[2])
-	}
-
-	// Test with multiple additional principals
-	os.Setenv("ADDITIONAL_PRINCIPALS", "cluster.local/ns/foo/sa/bar, cluster.local/ns/baz/sa/qux")
-	policy = reconciler.getAuthorizationPolicy(profile)
-	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
-	if len(firstRulePrincipals) != 4 {
-		t.Errorf("Expected 4 principals with two ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
-	}
-	if firstRulePrincipals[2] != "cluster.local/ns/foo/sa/bar" {
-		t.Errorf("Expected third principal to be 'cluster.local/ns/foo/sa/bar', got %s", firstRulePrincipals[2])
-	}
-	if firstRulePrincipals[3] != "cluster.local/ns/baz/sa/qux" {
-		t.Errorf("Expected fourth principal to be 'cluster.local/ns/baz/sa/qux', got %s", firstRulePrincipals[3])
-	}
-
-	// Test with empty value
-	os.Setenv("ADDITIONAL_PRINCIPALS", "")
-	policy = reconciler.getAuthorizationPolicy(profile)
-	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
-	if len(firstRulePrincipals) != 2 {
-		t.Errorf("Expected 2 principals with empty ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
-	}
-
-	// Test with comma-only values that trim to empty entries
-	os.Setenv("ADDITIONAL_PRINCIPALS", ", ,")
-	policy = reconciler.getAuthorizationPolicy(profile)
-	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
-	if len(firstRulePrincipals) != 2 {
-		t.Errorf("Expected 2 principals with comma-only ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
-	}
-
-	// Test with ambient mode and additional principals
-	reconcilerAmbient := &ProfileReconciler{
+	ambientReconciler := &ProfileReconciler{
 		ServiceMeshMode: "istio-ambient",
 		WaypointName:    "test-waypoint",
 		UserIdHeader:    "x-goog-authenticated-user-email",
 		UserIdPrefix:    "accounts.google.com:",
 	}
-	os.Setenv("ADDITIONAL_PRINCIPALS", "cluster.local/ns/extra/sa/extra-sa")
-	policy = reconcilerAmbient.getAuthorizationPolicy(profile)
-	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
-	if len(firstRulePrincipals) != 3 {
-		t.Errorf("Expected 3 principals in ambient mode with ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
+
+	tests := []struct {
+		name               string
+		reconciler         *ProfileReconciler
+		setEnv             bool
+		envValue           string
+		expectedPrincipals []string
+		expectTargetRefs   bool
+	}{
+		{
+			name:               "without ADDITIONAL_PRINCIPALS",
+			reconciler:         sidecarReconciler,
+			setEnv:             false,
+			expectedPrincipals: nil, // only assert length (2 defaults)
+		},
+		{
+			name:       "single additional principal",
+			reconciler: sidecarReconciler,
+			setEnv:     true,
+			envValue:   "cluster.local/ns/extra/sa/extra-sa",
+			expectedPrincipals: []string{
+				"", "", "cluster.local/ns/extra/sa/extra-sa",
+			},
+		},
+		{
+			name:       "multiple additional principals",
+			reconciler: sidecarReconciler,
+			setEnv:     true,
+			envValue:   "cluster.local/ns/foo/sa/bar, cluster.local/ns/baz/sa/qux",
+			expectedPrincipals: []string{
+				"", "", "cluster.local/ns/foo/sa/bar", "cluster.local/ns/baz/sa/qux",
+			},
+		},
+		{
+			name:               "empty value",
+			reconciler:         sidecarReconciler,
+			setEnv:             true,
+			envValue:           "",
+			expectedPrincipals: nil, // only assert length (2 defaults)
+		},
+		{
+			name:               "comma-only values trim to empty entries",
+			reconciler:         sidecarReconciler,
+			setEnv:             true,
+			envValue:           ", ,",
+			expectedPrincipals: nil, // only assert length (2 defaults)
+		},
+		{
+			name:       "ambient mode with additional principal",
+			reconciler: ambientReconciler,
+			setEnv:     true,
+			envValue:   "cluster.local/ns/extra/sa/extra-sa",
+			expectedPrincipals: []string{
+				"", "", "cluster.local/ns/extra/sa/extra-sa",
+			},
+			expectTargetRefs: true,
+		},
 	}
-	if firstRulePrincipals[2] != "cluster.local/ns/extra/sa/extra-sa" {
-		t.Errorf("Expected third principal to be 'cluster.local/ns/extra/sa/extra-sa', got %s", firstRulePrincipals[2])
-	}
-	// Verify TargetRefs is still set in ambient mode
-	if policy.TargetRefs == nil {
-		t.Errorf("Expected TargetRefs to be set in ambient mode with additional principals")
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setEnv {
+				os.Setenv("ADDITIONAL_PRINCIPALS", tc.envValue)
+			} else {
+				os.Unsetenv("ADDITIONAL_PRINCIPALS")
+			}
+			defer os.Unsetenv("ADDITIONAL_PRINCIPALS")
+
+			policy := tc.reconciler.getAuthorizationPolicy(profile)
+			principals := policy.Rules[0].From[0].Source.Principals
+
+			expectedLen := 2
+			if tc.expectedPrincipals != nil {
+				expectedLen = len(tc.expectedPrincipals)
+			}
+			if len(principals) != expectedLen {
+				t.Errorf("Expected %d principals, got %d", expectedLen, len(principals))
+			}
+
+			// Only assert specific positions when expectedPrincipals is provided.
+			// Indexes with empty strings are skipped (used as placeholders for the
+			// default principals which we don't assert on).
+			for i, want := range tc.expectedPrincipals {
+				if want == "" {
+					continue
+				}
+				if i >= len(principals) {
+					t.Errorf("Expected principal at index %d to be %q, but principals has length %d", i, want, len(principals))
+					continue
+				}
+				if principals[i] != want {
+					t.Errorf("Expected principal at index %d to be %q, got %q", i, want, principals[i])
+				}
+			}
+
+			if tc.expectTargetRefs && policy.TargetRefs == nil {
+				t.Errorf("Expected TargetRefs to be set")
+			}
+		})
 	}
 }
