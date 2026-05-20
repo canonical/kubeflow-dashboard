@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"testing"
 
@@ -364,5 +365,131 @@ func TestGetAuthorizationPolicyAmbientMode(t *testing.T) {
 				t.Errorf("Expected TargetRef Name to be 'test-waypoint', got %s", targetRef.Name)
 			}
 		}
+	}
+}
+
+func TestGetAuthorizationPolicyAdditionalPrincipals(t *testing.T) {
+	profile := &profilev1.Profile{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-profile",
+		},
+		Spec: profilev1.ProfileSpec{
+			Owner: rbacv1.Subject{
+				Kind: "User",
+				Name: "test-user@example.com",
+			},
+		},
+	}
+
+	sidecarReconciler := &ProfileReconciler{
+		ServiceMeshMode: "istio-sidecar",
+		UserIdHeader:    "x-goog-authenticated-user-email",
+		UserIdPrefix:    "accounts.google.com:",
+	}
+	ambientReconciler := &ProfileReconciler{
+		ServiceMeshMode: "istio-ambient",
+		WaypointName:    "test-waypoint",
+		UserIdHeader:    "x-goog-authenticated-user-email",
+		UserIdPrefix:    "accounts.google.com:",
+	}
+
+	tests := []struct {
+		name               string
+		reconciler         *ProfileReconciler
+		setEnv             bool
+		envValue           string
+		expectedPrincipals []string
+		expectTargetRefs   bool
+	}{
+		{
+			name:               "without ADDITIONAL_PRINCIPALS",
+			reconciler:         sidecarReconciler,
+			setEnv:             false,
+			expectedPrincipals: nil, // only assert length (2 defaults)
+		},
+		{
+			name:       "single additional principal",
+			reconciler: sidecarReconciler,
+			setEnv:     true,
+			envValue:   "cluster.local/ns/extra/sa/extra-sa",
+			expectedPrincipals: []string{
+				"", "", "cluster.local/ns/extra/sa/extra-sa",
+			},
+		},
+		{
+			name:       "multiple additional principals",
+			reconciler: sidecarReconciler,
+			setEnv:     true,
+			envValue:   "cluster.local/ns/foo/sa/bar, cluster.local/ns/baz/sa/qux",
+			expectedPrincipals: []string{
+				"", "", "cluster.local/ns/foo/sa/bar", "cluster.local/ns/baz/sa/qux",
+			},
+		},
+		{
+			name:               "empty value",
+			reconciler:         sidecarReconciler,
+			setEnv:             true,
+			envValue:           "",
+			expectedPrincipals: nil, // only assert length (2 defaults)
+		},
+		{
+			name:               "comma-only values trim to empty entries",
+			reconciler:         sidecarReconciler,
+			setEnv:             true,
+			envValue:           ", ,",
+			expectedPrincipals: nil, // only assert length (2 defaults)
+		},
+		{
+			name:       "ambient mode with additional principal",
+			reconciler: ambientReconciler,
+			setEnv:     true,
+			envValue:   "cluster.local/ns/extra/sa/extra-sa",
+			expectedPrincipals: []string{
+				"", "", "cluster.local/ns/extra/sa/extra-sa",
+			},
+			expectTargetRefs: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setEnv {
+				os.Setenv("ADDITIONAL_PRINCIPALS", tc.envValue)
+			} else {
+				os.Unsetenv("ADDITIONAL_PRINCIPALS")
+			}
+			defer os.Unsetenv("ADDITIONAL_PRINCIPALS")
+
+			policy := tc.reconciler.getAuthorizationPolicy(profile)
+			principals := policy.Rules[0].From[0].Source.Principals
+
+			expectedLen := 2
+			if tc.expectedPrincipals != nil {
+				expectedLen = len(tc.expectedPrincipals)
+			}
+			if len(principals) != expectedLen {
+				t.Errorf("Expected %d principals, got %d", expectedLen, len(principals))
+			}
+
+			// Only assert specific positions when expectedPrincipals is provided.
+			// Indexes with empty strings are skipped (used as placeholders for the
+			// default principals which we don't assert on).
+			for i, want := range tc.expectedPrincipals {
+				if want == "" {
+					continue
+				}
+				if i >= len(principals) {
+					t.Errorf("Expected principal at index %d to be %q, but principals has length %d", i, want, len(principals))
+					continue
+				}
+				if principals[i] != want {
+					t.Errorf("Expected principal at index %d to be %q, got %q", i, want, principals[i])
+				}
+			}
+
+			if tc.expectTargetRefs && policy.TargetRefs == nil {
+				t.Errorf("Expected TargetRefs to be set")
+			}
+		})
 	}
 }
