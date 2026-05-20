@@ -429,6 +429,14 @@ func TestGetAuthorizationPolicyAdditionalPrincipals(t *testing.T) {
 		t.Errorf("Expected 2 principals with empty ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
 	}
 
+	// Test with comma-only values that trim to empty entries
+	os.Setenv("ADDITIONAL_PRINCIPALS", ", ,")
+	policy = reconciler.getAuthorizationPolicy(profile)
+	firstRulePrincipals = policy.Rules[0].From[0].Source.Principals
+	if len(firstRulePrincipals) != 2 {
+		t.Errorf("Expected 2 principals with comma-only ADDITIONAL_PRINCIPALS, got %d", len(firstRulePrincipals))
+	}
+
 	// Test with ambient mode and additional principals
 	reconcilerAmbient := &ProfileReconciler{
 		ServiceMeshMode: "istio-ambient",
