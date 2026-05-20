@@ -1021,10 +1021,10 @@ func GetEnvDefault(variable string, defaultVal string) string {
 // list of principals (e.g. "cluster.local/ns/foo/sa/bar,cluster.local/ns/baz/sa/qux").
 func getAdditionalPrincipals() []string {
 	val := os.Getenv("ADDITIONAL_PRINCIPALS")
+	principals := make([]string, 0)
 	if val == "" {
-		return nil
+		return principals
 	}
-	var principals []string
 	for _, p := range strings.Split(val, ",") {
 		p = strings.TrimSpace(p)
 		if p != "" {
